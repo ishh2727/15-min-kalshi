@@ -93,7 +93,7 @@ async function getKalshi(){
     const r=await fetch(url,{cache:"no-store"});
     if(!r.ok) throw new Error("Kalshi HTTP "+r.status);
     const data=await r.json();
-    const markets=(data.markets||[]).filter(m=>m.status==="open" || !m.status);
+    const markets=(data.markets||[]).filter(m=>m.status==="open" || m.status==="active" || !m.status);
     if(!markets.length) throw new Error("No open BTC 15M market");
 
     // Prefer the market closing soonest.
