@@ -51,33 +51,60 @@ function updatePrice(p){
 }
 
 function connectCoinbase(){
-  const ws=new WebSocket("wss://advanced-trade-ws.coinbase.com");
-  ws.onopen=()=>{
-    setStatus("BTC live • Coinbase",true);
-    ws.send(JSON.stringify({
-      type:"subscribe",
-      product_ids:["BTC-USD"],
-      channel:"ticker"
-    }));
-    ws.send(JSON.stringify({type:"subscribe",channel:"heartbeats"}));
-  };
-  ws.onmessage=e=>{
-    try{
-      const d=JSON.parse(e.data);
-      const tickers=[];
-      for(const ev of (d.events||[])){
-        for(const t of (ev.tickers||[])) tickers.push(t);
+  let ws;
+
+  try{
+    ws=new WebSocket("wss://advanced-trade-ws.coinbase.com");
+
+    ws.onopen=()=>{
+      setStatus("BTC live • Coinbase",true);
+
+      ws.send(JSON.stringify({
+        type:"subscribe",
+        product_ids:["BTC-USD"],
+        channel:"ticker"
+      }));
+
+      ws.send(JSON.stringify({
+        type:"subscribe",
+        channel:"heartbeats"
+      }));
+    };
+
+    ws.onmessage=e=>{
+      try{
+        const d=JSON.parse(e.data);
+
+        for(const ev of (d.events||[])){
+          for(const t of (ev.tickers||[])){
+            if(t.product_id==="BTC-USD" && t.price){
+              updatePrice(Number(t.price));
+            }
+          }
+        }
+      }catch(err){
+        console.error("BTC message error:",err);
       }
-      for(const t of tickers){
-        if(t.product_id==="BTC-USD" && t.price) updatePrice(Number(t.price));
-      }
-    }catch{}
-  };
-  ws.onerror=()=>setStatus("BTC feed error — reconnecting…");
-  ws.onclose=()=>{
-    setStatus("BTC reconnecting…");
-    setTimeout(connectCoinbase,2000);
-  };
+    };
+
+    ws.onerror=()=>{
+      setStatus("BTC connection error");
+    };
+
+    ws.onclose=()=>{
+      setStatus("BTC reconnecting…");
+
+      setTimeout(()=>{
+        connectCoinbase();
+      },5000);
+    };
+
+  }catch(err){
+    console.error("BTC connection failed:",err);
+    setStatus("BTC connection failed");
+
+    setTimeout(connectCoinbase,5000);
+  }
 }
 
 function firstNumber(...vals){
