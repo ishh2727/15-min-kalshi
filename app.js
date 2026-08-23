@@ -91,48 +91,95 @@ async function getKalshi(){
   try{
     const url="https://external-api.kalshi.com/trade-api/v2/markets?series_ticker=KXBTC15M&status=open&limit=10";
     const r=await fetch(url,{cache:"no-store"});
-    if(!r.ok) throw new Error("Kalshi HTTP "+r.status);
-    const data=await r.json();
-    const markets=(data.markets||[]).filter(m=>m.status==="open" || m.status==="active" || !m.status);
-    if(!markets.length) throw new Error("No open BTC 15M market");
 
-    // Prefer the market closing soonest.
-    markets.sort((a,b)=>new Date(a.close_time||a.expected_expiration_time||0)-new Date(b.close_time||b.expected_expiration_time||0));
+    if(!r.ok) throw new Error("Kalshi HTTP "+r.status);
+
+    const data=await r.json();
+
+    const markets=(data.markets||[]).filter(
+      m=>m.status==="open" || m.status==="active" || !m.status
+    );
+
+    if(!markets.length){
+      throw new Error("No active BTC 15M market");
+    }
+
+    markets.sort((a,b)=>{
+      const aTime=new Date(
+        a.close_time ||
+        a.expected_expiration_time ||
+        a.expiration_time ||
+        0
+      ).getTime();
+
+      const bTime=new Date(
+        b.close_time ||
+        b.expected_expiration_time ||
+        b.expiration_time ||
+        0
+      ).getTime();
+
+      return aTime-bTime;
+    });
+
     const m=markets[0];
 
     state.marketId=m.ticker;
-    state.target=firstNumber(m.floor_strike,m.strike_price,m.floor_strike_dollars);
-    state.marketEnd=m.close_time ? new Date(m.close_time).getTime() :
-                    m.expected_expiration_time ? new Date(m.expected_expiration_time).getTime() : null;
 
-    let yesAsk=firstNumber(m.yes_ask_dollars,m.yes_ask);
-    let noAsk=firstNumber(m.no_ask_dollars,m.no_ask);
-    let yesBid=firstNumber(m.yes_bid_dollars,m.yes_bid);
-    let noBid=firstNumber(m.no_bid_dollars,m.no_bid);
+    state.target=firstNumber(
+      m.floor_strike,
+      m.strike_price,
+      m.floor_strike_dollars
+    );
 
-    // Integer cent fields are converted to dollars.
-    if(m.yes_ask_dollars==null && yesAsk!=null && yesAsk>1) yesAsk/=100;
-    if(m.no_ask_dollars==null && noAsk!=null && noAsk>1) noAsk/=100;
-    if(m.yes_bid_dollars==null && yesBid!=null && yesBid>1) yesBid/=100;
-    if(m.no_bid_dollars==null && noBid!=null && noBid>1) noBid/=100;
+    state.marketEnd=m.close_time
+      ? new Date(m.close_time).getTime()
+      : m.expected_expiration_time
+      ? new Date(m.expected_expiration_time).getTime()
+      : null;
 
-    // If an ask isn't exposed, derive it from the opposite side's bid.
-    state.up=yesAsk ?? (noBid!=null ? 1-noBid : yesBid);
-    state.down=noAsk ?? (yesBid!=null ? 1-yesBid : noBid);
+    const yesAsk=firstNumber(m.yes_ask_dollars,m.yes_ask);
+    const noAsk=firstNumber(m.no_ask_dollars,m.no_ask);
+    const yesBid=firstNumber(m.yes_bid_dollars,m.yes_bid);
+    const noBid=firstNumber(m.no_bid_dollars,m.no_bid);
 
-    $("marketId").textContent=m.ticker;
+    state.up=
+      yesAsk ??
+      (noBid!=null ? 1-noBid : yesBid);
+
+    state.down=
+      noAsk ??
+      (yesBid!=null ? 1-yesBid : noBid);
+
+    $("marketId").textContent=m.ticker || "—";
     $("targetPrice").textContent=money(state.target);
-    $("upPrice").textContent=state.up==null?"—":pct(state.up);
-    $("downPrice").textContent=state.down==null?"—":pct(state.down);
-    $("upBar").style.width=state.up==null?"0":Math.min(100,state.up*100)+"%";
-    $("downBar").style.width=state.down==null?"0":Math.min(100,state.down*100)+"%";
-    $("kalshiNote").textContent="Live Kalshi public market data • "+(m.volume_fp??m.volume??0)+" volume";
+
+    $("upPrice").textContent=
+      state.up==null ? "—" : pct(state.up);
+
+    $("downPrice").textContent=
+      state.down==null ? "—" : pct(state.down);
+
+    $("upBar").style.width=
+      state.up==null ? "0%" : Math.min(100,state.up*100)+"%";
+
+    $("downBar").style.width=
+      state.down==null ? "0%" : Math.min(100,state.down*100)+"%";
+
+    $("kalshiNote").textContent=
+      "Live Kalshi public market data • "+
+      (m.volume_fp ?? m.volume ?? 0)+
+      " volume";
+
     calculateSignal();
+
   }catch(e){
-    $("kalshiNote").textContent="Kalshi feed unavailable: "+e.message;
+    console.error("Kalshi error:",e);
+
+    $("kalshiNote").textContent=
+      "Kalshi feed unavailable: "+e.message;
   }
 }
-
 function calculateSignal(){
   if(state.price==null || state.target==null) return;
   const recent=state.samples.filter(x=>x.t>Date.now()-5*60*1000).map(x=>x.p);
