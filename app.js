@@ -51,60 +51,34 @@ function updatePrice(p){
 }
 
 function connectCoinbase(){
-  let ws;
+  async function getBTC(){
+    try{
+      const r=await fetch(
+        "https://api.coinbase.com/v2/prices/BTC-USD/spot",
+        {cache:"no-store"}
+      );
 
-  try{
-    ws=new WebSocket("wss://advanced-trade-ws.coinbase.com");
+      if(!r.ok) throw new Error("BTC HTTP "+r.status);
 
-    ws.onopen=()=>{
+      const data=await r.json();
+      const price=Number(data?.data?.amount);
+
+      if(!Number.isFinite(price)){
+        throw new Error("Invalid BTC price");
+      }
+
+      updatePrice(price);
       setStatus("BTC live • Coinbase",true);
 
-      ws.send(JSON.stringify({
-        type:"subscribe",
-        product_ids:["BTC-USD"],
-        channel:"ticker"
-      }));
-
-      ws.send(JSON.stringify({
-        type:"subscribe",
-        channel:"heartbeats"
-      }));
-    };
-
-    ws.onmessage=e=>{
-      try{
-        const d=JSON.parse(e.data);
-
-        for(const ev of (d.events||[])){
-          for(const t of (ev.tickers||[])){
-            if(t.product_id==="BTC-USD" && t.price){
-              updatePrice(Number(t.price));
-            }
-          }
-        }
-      }catch(err){
-        console.error("BTC message error:",err);
-      }
-    };
-
-    ws.onerror=()=>{
-      setStatus("BTC connection error");
-    };
-
-    ws.onclose=()=>{
-      setStatus("BTC reconnecting…");
-
-      setTimeout(()=>{
-        connectCoinbase();
-      },5000);
-    };
-
-  }catch(err){
-    console.error("BTC connection failed:",err);
-    setStatus("BTC connection failed");
-
-    setTimeout(connectCoinbase,5000);
+    }catch(e){
+      console.error("BTC price error:",e);
+      setStatus("BTC feed error — retrying…");
+    }
   }
+
+  getBTC();
+
+  setInterval(getBTC,5000);
 }
 
 function firstNumber(...vals){
