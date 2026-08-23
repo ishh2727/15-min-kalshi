@@ -176,8 +176,7 @@ async function getKalshi(){
   }catch(e){
     console.error("Kalshi error:",e);
 
-    $("kalshiNote").textContent=
-      "Kalshi feed unavailable: "+e.message;
+    $("kalshiNote").textContent="ERROR: "+e.message;
   }
 }
 function calculateSignal(){
