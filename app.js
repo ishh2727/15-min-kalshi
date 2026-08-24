@@ -1,247 +1,528 @@
 const $ = id => document.getElementById(id);
 
 const state = {
-  price: null, previous: null, samples: [], target: null,
-  up: null, down: null, marketId: null, marketEnd: null,
+  price: null,
+  previous: null,
+  samples: [],
+  target: null,
+  up: null,
+  down: null,
+  marketId: null,
+  marketEnd: null,
   lastSignal: "WAITING",
   logs: JSON.parse(localStorage.getItem("btcSignalLogs") || "[]")
 };
 
-function money(n){
-  return n == null || !isFinite(n) ? "—" :
-    "$" + Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-}
-function pct(n){
-  return n == null || !isFinite(n) ? "—" : (n*100).toFixed(1)+"%";
-}
-function setStatus(text, ok=false){
-  $("status").innerHTML=`<span style="background:${ok?"#62d58a":"#f0b429"}"></span>${text}`;
-}
+function money(n) {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
 
-function drawChart(){
-  const c=$("chart"), ctx=c.getContext("2d"), dpr=devicePixelRatio||1;
-  const w=c.clientWidth, h=c.height;
-  c.width=w*dpr; c.height=h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx.clearRect(0,0,w,h);
-  if(state.samples.length<2) return;
-  const vals=state.samples.map(x=>x.p);
-  const min=Math.min(...vals), max=Math.max(...vals), pad=(max-min)||1;
-  ctx.beginPath();
-  state.samples.forEach((x,i)=>{
-    const px=i*(w/(state.samples.length-1));
-    const py=h-20-((x.p-min)/pad)*(h-35);
-    i?ctx.lineTo(px,py):ctx.moveTo(px,py);
+  return "$" + Number(n).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
   });
-  ctx.strokeStyle="#7dd3fc"; ctx.lineWidth=2; ctx.stroke();
 }
 
-function updatePrice(p){
-  if(!Number.isFinite(p)) return;
-  state.previous=state.price; state.price=p;
-  state.samples.push({t:Date.now(),p});
-  const cutoff=Date.now()-20*60*1000;
-  state.samples=state.samples.filter(x=>x.t>=cutoff);
-  $("btcPrice").textContent=money(p);
-  if(state.previous){
-    const ch=p/state.previous-1;
-    $("btcChange").textContent=(ch>=0?"+":"")+pct(ch)+" since last tick";
-  }
-  $("sampleCount").textContent=state.samples.length+" samples";
-  drawChart(); calculateSignal();
+function pct(n) {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  return (Number(n) * 100).toFixed(1) + "%";
 }
 
-function connectCoinbase(){
-  async function getBTC(){
-    try{
-      const r=await fetch(
-        "https://api.coinbase.com/v2/prices/BTC-USD/spot",
-        {cache:"no-store"}
-      );
+function firstNumber(...values) {
+  for (const value of values) {
+    if (value == null || value === "") continue;
 
-      if(!r.ok) throw new Error("BTC HTTP "+r.status);
+    const n = Number(value);
 
-      const data=await r.json();
-      const price=Number(data?.data?.amount);
-
-      if(!Number.isFinite(price)){
-        throw new Error("Invalid BTC price");
-      }
-
-      updatePrice(price);
-      setStatus("BTC live • Coinbase",true);
-
-    }catch(e){
-      console.error("BTC price error:",e);
-      setStatus("BTC feed error — retrying…");
-    }
+    if (Number.isFinite(n)) return n;
   }
 
-  getBTC();
-
-  setInterval(getBTC,5000);
-}
-
-function firstNumber(...vals){
-  for(const v of vals){
-    if(v!==undefined && v!==null && v!=="" && Number.isFinite(Number(v))) return Number(v);
-  }
   return null;
 }
 
-async function getKalshi(){
-  try{
-    const url="https://external-api.kalshi.com/trade-api/v2/markets?series_ticker=KXBTC15M&status=open&limit=10";
-    const r=await fetch(url,{cache:"no-store"});
+function setStatus(text, ok = false) {
+  const el = $("status");
 
-    if(!r.ok) throw new Error("Kalshi HTTP "+r.status);
+  if (!el) return;
 
-    const data=await r.json();
+  el.innerHTML =
+    `<span style="background:${ok ? "#62d58a" : "#f0b429"}"></span>` +
+    text;
+}
 
-    const markets=(data.markets||[]).filter(
-      m=>m.status==="open" || m.status==="active" || !m.status
+function updatePrice(price) {
+  if (!Number.isFinite(price)) return;
+
+  state.previous = state.price;
+  state.price = price;
+
+  $("btcPrice").textContent = money(price);
+
+  if (state.previous != null) {
+    const change = price - state.previous;
+    const percent = (change / state.previous) * 100;
+
+    $("btcChange").textContent =
+      (change >= 0 ? "+" : "") +
+      money(change) +
+      " (" +
+      (percent >= 0 ? "+" : "") +
+      percent.toFixed(3) +
+      "%)";
+  } else {
+    $("btcChange").textContent = "Live BTC price";
+  }
+
+  state.samples.push({
+    t: Date.now(),
+    p: price
+  });
+
+  const oneMinuteAgo = Date.now() - 60 * 1000;
+
+  state.samples = state.samples.filter(x => x.t >= oneMinuteAgo);
+
+  $("sampleCount").textContent =
+    state.samples.length + " samples";
+
+  drawChart();
+
+  if (state.target != null) {
+    const distance = price - state.target;
+
+    $("distance").textContent =
+      (distance >= 0 ? "+" : "") +
+      money(distance) +
+      " vs target";
+  }
+
+  calculateSignal();
+}
+
+function drawChart() {
+  const canvas = $("chart");
+
+  if (!canvas) return;
+
+  const ctx = canvas.getContext("2d");
+
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 300;
+  const h = canvas.height || 220;
+
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  if (state.samples.length < 2) return;
+
+  const values = state.samples.map(x => x.p);
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+
+  ctx.beginPath();
+
+  state.samples.forEach((sample, index) => {
+    const x =
+      index * (w / (state.samples.length - 1));
+
+    const y =
+      h -
+      20 -
+      ((sample.p - min) / range) *
+        (h - 40);
+
+    if (index === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+
+  ctx.strokeStyle = "#7dd3fc";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+async function getBTC() {
+  try {
+    const response = await fetch(
+      "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+      {
+        cache: "no-store"
+      }
     );
 
-    if(!markets.length){
+    if (!response.ok) {
+      throw new Error("BTC HTTP " + response.status);
+    }
+
+    const data = await response.json();
+
+    const price = Number(data.price);
+
+    if (!Number.isFinite(price)) {
+      throw new Error("Invalid BTC price");
+    }
+
+    updatePrice(price);
+    setStatus("BTC live • Binance", true);
+
+  } catch (error) {
+    console.error("BTC error:", error);
+    setStatus("BTC feed error — retrying…");
+  }
+}
+
+async function getKalshi() {
+  try {
+    const kalshiUrl =
+      "https://external-api.kalshi.com/trade-api/v2/markets" +
+      "?series_ticker=KXBTC15M&status=open&limit=10";
+
+    const relay =
+      "https://api.allorigins.win/raw?url=" +
+      encodeURIComponent(kalshiUrl);
+
+    const response = await fetch(relay, {
+      cache: "no-store"
+    });
+
+    if (!response.ok) {
+      throw new Error("Kalshi relay HTTP " + response.status);
+    }
+
+    const data = await response.json();
+
+    const markets = (data.markets || []).filter(
+      market =>
+        market.status === "open" ||
+        market.status === "active" ||
+        !market.status
+    );
+
+    if (!markets.length) {
       throw new Error("No active BTC 15M market");
     }
 
-    markets.sort((a,b)=>{
-      const aTime=new Date(
+    markets.sort((a, b) => {
+      const aTime = new Date(
         a.close_time ||
         a.expected_expiration_time ||
         a.expiration_time ||
         0
       ).getTime();
 
-      const bTime=new Date(
+      const bTime = new Date(
         b.close_time ||
         b.expected_expiration_time ||
         b.expiration_time ||
         0
       ).getTime();
 
-      return aTime-bTime;
+      return aTime - bTime;
     });
 
-    const m=markets[0];
+    const market = markets[0];
 
-    state.marketId=m.ticker;
+    state.marketId = market.ticker || null;
 
-    state.target=firstNumber(
-      m.floor_strike,
-      m.strike_price,
-      m.floor_strike_dollars
+    state.target = firstNumber(
+      market.floor_strike,
+      market.strike_price,
+      market.floor_strike_dollars
     );
 
-    state.marketEnd=m.close_time
-      ? new Date(m.close_time).getTime()
-      : m.expected_expiration_time
-      ? new Date(m.expected_expiration_time).getTime()
+    state.marketEnd = market.close_time
+      ? new Date(market.close_time).getTime()
+      : market.expected_expiration_time
+      ? new Date(market.expected_expiration_time).getTime()
       : null;
 
-    const yesAsk=firstNumber(m.yes_ask_dollars,m.yes_ask);
-    const noAsk=firstNumber(m.no_ask_dollars,m.no_ask);
-    const yesBid=firstNumber(m.yes_bid_dollars,m.yes_bid);
-    const noBid=firstNumber(m.no_bid_dollars,m.no_bid);
+    let yesAsk = firstNumber(
+      market.yes_ask_dollars,
+      market.yes_ask
+    );
 
-    state.up=
+    let noAsk = firstNumber(
+      market.no_ask_dollars,
+      market.no_ask
+    );
+
+    let yesBid = firstNumber(
+      market.yes_bid_dollars,
+      market.yes_bid
+    );
+
+    let noBid = firstNumber(
+      market.no_bid_dollars,
+      market.no_bid
+    );
+
+    if (
+      market.yes_ask_dollars == null &&
+      yesAsk != null &&
+      yesAsk > 1
+    ) {
+      yesAsk /= 100;
+    }
+
+    if (
+      market.no_ask_dollars == null &&
+      noAsk != null &&
+      noAsk > 1
+    ) {
+      noAsk /= 100;
+    }
+
+    if (
+      market.yes_bid_dollars == null &&
+      yesBid != null &&
+      yesBid > 1
+    ) {
+      yesBid /= 100;
+    }
+
+    if (
+      market.no_bid_dollars == null &&
+      noBid != null &&
+      noBid > 1
+    ) {
+      noBid /= 100;
+    }
+
+    state.up =
       yesAsk ??
-      (noBid!=null ? 1-noBid : yesBid);
+      (noBid != null ? 1 - noBid : yesBid);
 
-    state.down=
+    state.down =
       noAsk ??
-      (yesBid!=null ? 1-yesBid : noBid);
+      (yesBid != null ? 1 - yesBid : noBid);
 
-    $("marketId").textContent=m.ticker || "—";
-    $("targetPrice").textContent=money(state.target);
+    $("marketId").textContent =
+      market.ticker || "—";
 
-    $("upPrice").textContent=
-      state.up==null ? "—" : pct(state.up);
+    $("targetPrice").textContent =
+      money(state.target);
 
-    $("downPrice").textContent=
-      state.down==null ? "—" : pct(state.down);
+    $("upPrice").textContent =
+      state.up == null ? "—" : pct(state.up);
 
-    $("upBar").style.width=
-      state.up==null ? "0%" : Math.min(100,state.up*100)+"%";
+    $("downPrice").textContent =
+      state.down == null ? "—" : pct(state.down);
 
-    $("downBar").style.width=
-      state.down==null ? "0%" : Math.min(100,state.down*100)+"%";
+    $("upBar").style.width =
+      state.up == null
+        ? "0%"
+        : Math.min(100, state.up * 100) + "%";
 
-    $("kalshiNote").textContent=
-      "Live Kalshi public market data • "+
-      (m.volume_fp ?? m.volume ?? 0)+
+    $("downBar").style.width =
+      state.down == null
+        ? "0%"
+        : Math.min(100, state.down * 100) + "%";
+
+    $("kalshiNote").textContent =
+      "Live Kalshi public market data • " +
+      (market.volume_fp ?? market.volume ?? 0) +
       " volume";
+
+    if (state.price != null && state.target != null) {
+      const distance = state.price - state.target;
+
+      $("distance").textContent =
+        (distance >= 0 ? "+" : "") +
+        money(distance) +
+        " vs target";
+    }
 
     calculateSignal();
 
-  }catch(e){
-    console.error("Kalshi error:",e);
+  } catch (error) {
+    console.error("Kalshi error:", error);
 
-    $("kalshiNote").textContent="ERROR: "+e.message;
+    $("kalshiNote").textContent =
+      "Kalshi feed unavailable: " +
+      error.message;
   }
 }
-function calculateSignal(){
-  if(state.price==null || state.target==null) return;
-  const recent=state.samples.filter(x=>x.t>Date.now()-5*60*1000).map(x=>x.p);
-  if(recent.length<20){
-    $("signal").textContent="COLLECTING";
-    $("reason").textContent="Collecting enough live BTC observations…";
+
+function calculateSignal() {
+  if (
+    state.price == null ||
+    state.target == null ||
+    state.up == null ||
+    state.down == null
+  ) {
+    $("signal").textContent = "WAITING";
+    $("modelProb").textContent = "—";
+    $("marketProb").textContent = "—";
+    $("edge").textContent = "—";
+    $("confidence").textContent = "—";
+    $("reason").textContent = "Collecting data…";
     return;
   }
 
-  const first=recent[0], last=recent[recent.length-1];
-  const momentum=last/first-1;
-  const distance=(last-state.target)/state.target;
+  const distance =
+    (state.price - state.target) /
+    Math.max(state.target, 1);
 
-  // Baseline probability model. It is intentionally conservative and will
-  // later be replaced/tuned using historical Kalshi backtesting.
-  let pUp=.5 + Math.tanh(momentum*1200)*.10 + Math.tanh(distance*300)*.18;
-  pUp=Math.max(.05,Math.min(.95,pUp));
-  const pDown=1-pUp;
+  const recent =
+    state.samples.length >= 2
+      ? state.samples[state.samples.length - 1].p -
+        state.samples[0].p
+      : 0;
 
-  const marketUp=state.up ?? .5, marketDown=state.down ?? .5;
-  const edgeUp=pUp-marketUp, edgeDown=pDown-marketDown;
+  let pUp = 0.5;
 
-  let sig="NO TRADE", prob=Math.max(pUp,pDown), edge=Math.max(edgeUp,edgeDown);
-  let reason="No sufficiently large model edge.";
+  pUp += Math.max(
+    -0.18,
+    Math.min(0.18, distance * 5)
+  );
 
-  if(edgeUp>=.10 && pUp>=.62){
-    sig="BUY UP"; prob=pUp; edge=edgeUp; reason="BTC momentum + position versus Kalshi target.";
-  }else if(edgeDown>=.10 && pDown>=.62){
-    sig="BUY DOWN"; prob=pDown; edge=edgeDown; reason="BTC momentum + position versus Kalshi target.";
+  pUp += Math.max(
+    -0.08,
+    Math.min(0.08, recent / state.price * 20)
+  );
+
+  pUp = Math.max(0.05, Math.min(0.95, pUp));
+
+  const pDown = 1 - pUp;
+
+  const marketUp = state.up;
+  const marketDown = state.down;
+
+  const edgeUp = pUp - marketUp;
+  const edgeDown = pDown - marketDown;
+
+  let signal = "WAITING";
+  let probability = null;
+  let edge = 0;
+  let reason = "No high-confidence setup.";
+
+  if (edgeUp >= 0.10 && pUp >= 0.62) {
+    signal = "BUY UP";
+    probability = pUp;
+    edge = edgeUp;
+    reason = "Model probability is meaningfully above the market price.";
+  } else if (
+    edgeDown >= 0.10 &&
+    pDown >= 0.62
+  ) {
+    signal = "BUY DOWN";
+    probability = pDown;
+    edge = edgeDown;
+    reason = "Model probability is meaningfully above the market price.";
+  } else {
+    probability = Math.max(pUp, pDown);
   }
 
-  $("signal").textContent=sig;
-  $("modelProb").textContent=pct(prob);
-  $("marketProb").textContent=pct(sig==="BUY DOWN"?marketDown:marketUp);
-  $("edge").textContent=(edge*100).toFixed(1)+" pts";
-  $("confidence").textContent=(prob*100).toFixed(0)+"% confidence";
-  $("reason").textContent=reason;
+  $("signal").textContent = signal;
+  $("modelProb").textContent = pct(probability);
+
+  $("marketProb").textContent =
+    signal === "BUY DOWN"
+      ? pct(marketDown)
+      : pct(marketUp);
+
+  $("edge").textContent =
+    (edge * 100).toFixed(1) + " pts";
+
+  $("confidence").textContent =
+    (probability * 100).toFixed(0) +
+    "% confidence";
+
+  $("reason").textContent = reason;
 }
 
-function renderLogs(){
-  const body=$("log"); body.innerHTML="";
-  state.logs.slice(0,30).forEach(x=>{
-    const tr=document.createElement("tr");
-    tr.innerHTML=`<td>${new Date(x.t).toLocaleTimeString()}</td><td>${x.s}</td><td>${pct(x.p)}</td><td>${pct(x.m)}</td><td>${(x.e*100).toFixed(1)} pts</td><td>${x.r||"PENDING"}</td>`;
-    body.appendChild(tr);
-  });
-  $("signals").textContent=state.logs.length;
-  const done=state.logs.filter(x=>x.r==="WIN"||x.r==="LOSS");
-  const wins=done.filter(x=>x.r==="WIN").length;
-  $("wins").textContent=wins; $("losses").textContent=done.length-wins;
-  $("winrate").textContent=done.length?(wins/done.length*100).toFixed(1)+"%":"—";
+function renderLogs() {
+  const body = $("log");
+
+  if (!body) return;
+
+  body.innerHTML = "";
+
+  state.logs
+    .slice(0, 30)
+    .forEach(item => {
+      const row = document.createElement("tr");
+
+      row.innerHTML =
+        "<td>" +
+        new Date(item.t).toLocaleTimeString() +
+        "</td>" +
+        "<td>" +
+        item.s +
+        "</td>" +
+        "<td>" +
+        pct(item.p) +
+        "</td>" +
+        "<td>" +
+        pct(item.m) +
+        "</td>" +
+        "<td>" +
+        (item.e * 100).toFixed(1) +
+        " pts</td>" +
+        "<td>" +
+        (item.r || "PENDING") +
+        "</td>";
+
+      body.appendChild(row);
+    });
+
+  $("signals").textContent =
+    state.logs.length;
+
+  const finished =
+    state.logs.filter(
+      item =>
+        item.r === "WIN" ||
+        item.r === "LOSS"
+    );
+
+  const wins =
+    finished.filter(
+      item => item.r === "WIN"
+    ).length;
+
+  $("wins").textContent = wins;
+
+  $("losses").textContent =
+    finished.length - wins;
+
+  $("winrate").textContent =
+    finished.length
+      ? ((wins / finished.length) * 100).toFixed(1) + "%"
+      : "—";
 }
 
-setInterval(()=>{
-  if(state.marketEnd){
-    const s=Math.max(0,Math.floor((state.marketEnd-Date.now())/1000));
-    $("timer").textContent=String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0");
-  }
-},250);
+setInterval(getBTC, 5000);
 
-setInterval(getKalshi,2000);
-window.addEventListener("resize",drawChart);
+setInterval(getKalshi, 5000);
+
+setInterval(() => {
+  if (!state.marketEnd) return;
+
+  const seconds = Math.max(
+    0,
+    Math.floor(
+      (state.marketEnd - Date.now()) / 1000
+    )
+  );
+
+  $("timer").textContent =
+    String(Math.floor(seconds / 60)).padStart(2, "0") +
+    ":" +
+    String(seconds % 60).padStart(2, "0");
+}, 250);
+
+window.addEventListener(
+  "resize",
+  drawChart
+);
+
 renderLogs();
-connectCoinbase();
+getBTC();
 getKalshi();
